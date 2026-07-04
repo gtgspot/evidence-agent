@@ -54,3 +54,20 @@ def verify_integrity(conn: sqlite3.Connection, artefact_id: str) -> bool:
     if art is None:
         raise KeyError(artefact_id)
     return sha256_file(art.path) == art.sha256
+
+
+def link_issue(conn: sqlite3.Connection, artefact_id: str, issue_ref: str) -> None:
+    """Link an artefact to an issue reference (idempotent)."""
+    conn.execute(
+        "INSERT OR IGNORE INTO linked_issues(artefact_id, issue_ref) VALUES(?, ?)",
+        (artefact_id, issue_ref),
+    )
+    conn.commit()
+
+
+def list_linked_issues(conn: sqlite3.Connection, artefact_id: str) -> list[str]:
+    rows = conn.execute(
+        "SELECT issue_ref FROM linked_issues WHERE artefact_id = ? ORDER BY issue_ref",
+        (artefact_id,),
+    ).fetchall()
+    return [r["issue_ref"] for r in rows]

@@ -3,6 +3,7 @@ from evidence_agent.core import ArtefactClass, add_artefact
 from evidence_agent.governance.schema import init_governance_schema
 from evidence_agent.governance.custody import (
     CustodyEvent, record_custody_event, list_custody, verify_integrity,
+    link_issue, list_linked_issues,
 )
 
 
@@ -42,3 +43,14 @@ def test_verify_integrity_true_then_false(gconn, tmp_path):
     assert verify_integrity(gconn, a.id) is True
     p.write_bytes(b"tampered")  # mutate the file on disk
     assert verify_integrity(gconn, a.id) is False
+
+
+def test_link_issue_dedupes_and_lists(gconn, tmp_path):
+    a = _original(gconn, tmp_path)
+    link_issue(gconn, a.id, "ISSUE-warrantless-search")
+    link_issue(gconn, a.id, "ISSUE-chain-of-custody")
+    link_issue(gconn, a.id, "ISSUE-warrantless-search")  # duplicate is a no-op
+    assert list_linked_issues(gconn, a.id) == [
+        "ISSUE-chain-of-custody",
+        "ISSUE-warrantless-search",
+    ]
