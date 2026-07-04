@@ -74,3 +74,26 @@ def list_requests(conn: sqlite3.Connection, matter_id: str) -> list[DiscoveryReq
         (matter_id,),
     ).fetchall()
     return [_row_to_request(r) for r in rows]
+
+
+def update_result(
+    conn: sqlite3.Connection, request_id: str, result: OutcomeState,
+    response_date: str, *, outstanding: bool | None = None,
+    prejudice_impact: str | None = None,
+) -> DiscoveryRequest:
+    """Record a response outcome. `outstanding` defaults to (result is not Produced);
+    `prejudice_impact` is preserved when not supplied."""
+    current = get_request(conn, request_id)
+    if current is None:
+        raise KeyError(request_id)
+    if outstanding is None:
+        outstanding = result is not OutcomeState.PRODUCED
+    if prejudice_impact is None:
+        prejudice_impact = current.prejudice_impact
+    conn.execute(
+        "UPDATE discovery_requests SET result = ?, response_date = ?, "
+        "outstanding = ?, prejudice_impact = ? WHERE request_id = ?",
+        (result.value, response_date, int(outstanding), prejudice_impact, request_id),
+    )
+    conn.commit()
+    return get_request(conn, request_id)
