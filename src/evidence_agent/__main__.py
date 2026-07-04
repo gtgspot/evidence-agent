@@ -134,6 +134,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init_parser.add_argument("--db", required=True, help="Path to the matter DB.")
 
+    manifest_parser = subparsers.add_parser(
+        "manifest",
+        help="Print the artefact manifest and duplicate report as JSON.",
+    )
+    manifest_parser.add_argument("--db", required=True, help="Path to the matter DB.")
+    manifest_parser.add_argument("--matter", required=True, help="Matter id.")
+
     return parser
 
 
@@ -155,6 +162,20 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_manifest(args: argparse.Namespace) -> int:
+    conn = db.connect(args.db)
+    print(
+        json.dumps(
+            {
+                "manifest": export_manifest(conn, args.matter),
+                "duplicates": duplicate_report(conn, args.matter),
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def run(argv: list[str]) -> int:
     """Build the parser, dispatch on the subcommand, and return an exit code."""
     parser = build_parser()
@@ -165,6 +186,8 @@ def run(argv: list[str]) -> int:
         return _cmd_compile(args)
     if command == "init":
         return _cmd_init(args)
+    if command == "manifest":
+        return _cmd_manifest(args)
 
     parser.print_help()
     return 2

@@ -81,3 +81,20 @@ def test_init_subcommand(tmp_path, capsys):
     conn.close()
     assert "artefacts" in tables
     assert "discovery_requests" in tables
+
+
+# --- item 4: manifest subcommand ---------------------------------------------
+
+def test_manifest_subcommand(tmp_path, capsys):
+    dbpath = tmp_path / "matter.db"
+    conn = _seed_db(dbpath)
+    a = _add_original(conn, tmp_path, "a", b"same")
+    b = _add_original(conn, tmp_path, "b", b"same")  # duplicate content
+    conn.close()
+
+    rc = cli.run(["manifest", "--db", str(dbpath), "--matter", "M1"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert {row["id"] for row in payload["manifest"]} == {a.id, b.id}
+    assert list(payload["duplicates"].values()) == [sorted([a.id, b.id])]
