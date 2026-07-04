@@ -141,6 +141,13 @@ def build_parser() -> argparse.ArgumentParser:
     manifest_parser.add_argument("--db", required=True, help="Path to the matter DB.")
     manifest_parser.add_argument("--matter", required=True, help="Matter id.")
 
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Verify integrity of every Original artefact for a matter.",
+    )
+    verify_parser.add_argument("--db", required=True, help="Path to the matter DB.")
+    verify_parser.add_argument("--matter", required=True, help="Matter id.")
+
     return parser
 
 
@@ -176,6 +183,16 @@ def _cmd_manifest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_verify(args: argparse.Namespace) -> int:
+    conn = db.connect(args.db)
+    all_ok = True
+    for art in list_artefacts(conn, args.matter, ArtefactClass.ORIGINAL):
+        ok = verify_integrity(conn, art.id)
+        all_ok = all_ok and ok
+        print(f"{art.id} {'OK' if ok else 'FAIL'}")
+    return 0 if all_ok else 1
+
+
 def run(argv: list[str]) -> int:
     """Build the parser, dispatch on the subcommand, and return an exit code."""
     parser = build_parser()
@@ -188,6 +205,8 @@ def run(argv: list[str]) -> int:
         return _cmd_init(args)
     if command == "manifest":
         return _cmd_manifest(args)
+    if command == "verify":
+        return _cmd_verify(args)
 
     parser.print_help()
     return 2

@@ -98,3 +98,31 @@ def test_manifest_subcommand(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert {row["id"] for row in payload["manifest"]} == {a.id, b.id}
     assert list(payload["duplicates"].values()) == [sorted([a.id, b.id])]
+
+
+# --- item 5: verify subcommand -----------------------------------------------
+
+def test_verify_subcommand_all_ok(tmp_path, capsys):
+    dbpath = tmp_path / "matter.db"
+    conn = _seed_db(dbpath)
+    a = _add_original(conn, tmp_path, "a", b"alpha")
+    conn.close()
+
+    rc = cli.run(["verify", "--db", str(dbpath), "--matter", "M1"])
+
+    assert rc == 0
+    assert capsys.readouterr().out.strip().splitlines() == [f"{a.id} OK"]
+
+
+def test_verify_subcommand_detects_tamper(tmp_path, capsys):
+    dbpath = tmp_path / "matter.db"
+    conn = _seed_db(dbpath)
+    a = _add_original(conn, tmp_path, "a", b"alpha")
+    b = _add_original(conn, tmp_path, "b", b"beta")
+    conn.close()
+    (tmp_path / "b").write_bytes(b"TAMPERED")  # hash no longer matches stored
+
+    rc = cli.run(["verify", "--db", str(dbpath), "--matter", "M1"])
+
+    assert rc == 1
+    assert capsys.readouterr().out.strip().splitlines() == [f"{a.id} OK", f"{b.id} FAIL"]
