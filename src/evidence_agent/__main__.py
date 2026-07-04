@@ -11,7 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from evidence_agent.core import db, list_artefacts, ArtefactClass
 from evidence_agent.core.hashing import sha256_file
+from evidence_agent.discovery.register import list_requests
+from evidence_agent.discovery.escalation import build_escalation_queue
+from evidence_agent.governance.custody import verify_integrity
+from evidence_agent.governance.manifest import export_manifest, duplicate_report
+from evidence_agent.schema import init_all
 
 # NOTE: the reasoning engine is intentionally NOT wired to this CLI — it requires
 # an injected LLM analyst and is library-only (out of stdlib scope).
@@ -122,6 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include hidden files and directories in the manifest.",
     )
 
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialise a matter database (all subsystem tables).",
+    )
+    init_parser.add_argument("--db", required=True, help="Path to the matter DB.")
+
     return parser
 
 
@@ -136,6 +148,13 @@ def _cmd_compile(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_init(args: argparse.Namespace) -> int:
+    conn = db.connect(args.db)
+    init_all(conn)
+    print(f"Initialised matter DB at {args.db}")
+    return 0
+
+
 def run(argv: list[str]) -> int:
     """Build the parser, dispatch on the subcommand, and return an exit code."""
     parser = build_parser()
@@ -144,6 +163,8 @@ def run(argv: list[str]) -> int:
     command = args.command or "compile"
     if command == "compile":
         return _cmd_compile(args)
+    if command == "init":
+        return _cmd_init(args)
 
     parser.print_help()
     return 2
