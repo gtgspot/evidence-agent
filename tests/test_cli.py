@@ -126,3 +126,30 @@ def test_verify_subcommand_detects_tamper(tmp_path, capsys):
 
     assert rc == 1
     assert capsys.readouterr().out.strip().splitlines() == [f"{a.id} OK", f"{b.id} FAIL"]
+
+
+# --- item 6: discovery subcommand --------------------------------------------
+
+def test_discovery_subcommand(tmp_path, capsys):
+    from evidence_agent.discovery.register import add_request
+
+    dbpath = tmp_path / "matter.db"
+    conn = _seed_db(dbpath)
+    req = add_request(
+        conn, "M1", date_requested="2026-01-01", due_date="2026-02-01",
+        legal_basis="s.42", item_sought="brief of evidence",
+    )
+    conn.close()
+
+    rc = cli.run(
+        ["discovery", "--db", str(dbpath), "--matter", "M1", "--as-of", "2026-03-01"]
+    )
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    # register: enum serialised to its value, not "OutcomeState.NO_RESPONSE".
+    assert [r["request_id"] for r in payload["register"]] == [req.request_id]
+    assert payload["register"][0]["result"] == "No Response"
+    # escalation: overdue (as-of is past the due date).
+    assert [e["request_id"] for e in payload["escalation"]] == [req.request_id]
+    assert payload["escalation"][0]["reason"] == "OVERDUE"

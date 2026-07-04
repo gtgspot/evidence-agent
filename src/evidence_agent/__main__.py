@@ -7,7 +7,9 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Iterable
 
@@ -148,6 +150,16 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--db", required=True, help="Path to the matter DB.")
     verify_parser.add_argument("--matter", required=True, help="Matter id.")
 
+    discovery_parser = subparsers.add_parser(
+        "discovery",
+        help="Print the discovery register and escalation queue as JSON.",
+    )
+    discovery_parser.add_argument("--db", required=True, help="Path to the matter DB.")
+    discovery_parser.add_argument("--matter", required=True, help="Matter id.")
+    discovery_parser.add_argument(
+        "--as-of", required=True, help="Escalation reference date (YYYY-MM-DD)."
+    )
+
     return parser
 
 
@@ -193,6 +205,30 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return 0 if all_ok else 1
 
 
+def _jsonable(obj):
+    """json.dumps default: unwrap dataclasses to dicts and enums to their values."""
+    if is_dataclass(obj):
+        return asdict(obj)
+    if isinstance(obj, Enum):
+        return obj.value
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _cmd_discovery(args: argparse.Namespace) -> int:
+    conn = db.connect(args.db)
+    print(
+        json.dumps(
+            {
+                "register": list_requests(conn, args.matter),
+                "escalation": build_escalation_queue(conn, args.matter, args.as_of),
+            },
+            indent=2,
+            default=_jsonable,
+        )
+    )
+    return 0
+
+
 def run(argv: list[str]) -> int:
     """Build the parser, dispatch on the subcommand, and return an exit code."""
     parser = build_parser()
@@ -207,6 +243,8 @@ def run(argv: list[str]) -> int:
         return _cmd_manifest(args)
     if command == "verify":
         return _cmd_verify(args)
+    if command == "discovery":
+        return _cmd_discovery(args)
 
     parser.print_help()
     return 2
