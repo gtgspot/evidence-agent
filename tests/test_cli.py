@@ -1,8 +1,9 @@
 import json
 
 import evidence_agent.__main__ as cli
-from evidence_agent.core import db, ArtefactClass, add_artefact
+from evidence_agent.core import db, ArtefactClass, add_artefact, list_artefacts
 from evidence_agent.core.hashing import sha256_file
+from evidence_agent.governance.custody import list_custody
 from evidence_agent.schema import init_all
 
 
@@ -153,3 +154,69 @@ def test_discovery_subcommand(tmp_path, capsys):
     # escalation: overdue (as-of is past the due date).
     assert [e["request_id"] for e in payload["escalation"]] == [req.request_id]
     assert payload["escalation"][0]["reason"] == "OVERDUE"
+
+
+# --- item 7: ingest subcommand -------------------------------------------------
+
+def test_ingest_subcommand_registers_originals(tmp_path, capsys):
+    src = tmp_path / "repo"
+    (src / "docs").mkdir(parents=True)
+    (src / "a.txt").write_bytes(b"alpha")
+    (src / "docs" / "b.txt").write_bytes(b"beta")
+    dbpath = tmp_path / "matter.db"
+
+    rc = cli.run(
+        ["ingest", "--db", str(dbpath), "--matter", "M1", "--source", str(src)]
+    )
+
+    assert rc == 0
+    assert "Ingested 2 files (0 already registered)" in capsys.readouterr().out
+
+    conn = db.connect(dbpath)
+    arts = list_artefacts(conn, "M1")
+    assert {a.metadata["relative_path"] for a in arts} == {"a.txt", "docs/b.txt"}
+    for art in arts:
+        assert art.cls is ArtefactClass.ORIGINAL
+        assert art.source == "repo"  # label defaults to the source dir name
+        assert art.sha256 == sha256_file(art.path)
+        events = list_custody(conn, art.id)
+        assert [e.event for e in events] == ["ingested"]
+        assert events[0].actor == "evidence-agent"
+    conn.close()
+
+
+def test_ingest_subcommand_is_idempotent(tmp_path, capsys):
+    src = tmp_path / "repo"
+    src.mkdir()
+    (src / "a.txt").write_bytes(b"alpha")
+    dbpath = tmp_path / "matter.db"
+    argv = ["ingest", "--db", str(dbpath), "--matter", "M1", "--source", str(src)]
+
+    assert cli.run(argv) == 0
+    capsys.readouterr()
+    (src / "b.txt").write_bytes(b"beta")  # only the new file registers on re-run
+
+    rc = cli.run(argv)
+
+    assert rc == 0
+    assert "Ingested 1 files (1 already registered)" in capsys.readouterr().out
+    conn = db.connect(dbpath)
+    assert len(list_artefacts(conn, "M1")) == 2
+    conn.close()
+
+
+def test_ingest_subcommand_skips_db_inside_source(tmp_path, capsys):
+    src = tmp_path / "repo"
+    src.mkdir()
+    (src / "a.txt").write_bytes(b"alpha")
+    dbpath = src / "matter.db"  # DB lives inside the ingested tree
+
+    rc = cli.run(
+        ["ingest", "--db", str(dbpath), "--matter", "M1", "--source", str(src)]
+    )
+
+    assert rc == 0
+    conn = db.connect(dbpath)
+    arts = list_artefacts(conn, "M1")
+    conn.close()
+    assert [a.metadata["relative_path"] for a in arts] == ["a.txt"]
