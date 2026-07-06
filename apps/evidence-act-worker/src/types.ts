@@ -19,6 +19,7 @@ export interface Env {
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   DASHBOARD_API_KEY?: string;
+  CLAUDE_WEBHOOK_SECRET?: string;
 }
 
 export type GateStatus =

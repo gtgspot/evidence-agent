@@ -25,6 +25,70 @@ async function readJson<T>(request: Request): Promise<T> {
   return (await request.json()) as T;
 }
 
+const CLAUDE_WEBHOOK_TTL_SECONDS = 300;
+
+function normalizeWebhookSignature(value: string | null): string {
+  if (!value) return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("sha256=")) {
+    return trimmed.slice("sha256=".length).trim().toLowerCase();
+  }
+  return trimmed.toLowerCase();
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    diff |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return diff === 0;
+}
+
+function parseTimestampSeconds(headerValue: string | null): number | null {
+  if (!headerValue?.trim()) return null;
+  const raw = headerValue.trim();
+
+  if (/^\d+$/.test(raw)) {
+    const numeric = Number.parseInt(raw, 10);
+    if (!Number.isFinite(numeric)) return null;
+    if (numeric > 1_000_000_000_000) return Math.floor(numeric / 1000);
+    return numeric;
+  }
+
+  const parsedMs = Date.parse(raw);
+  if (!Number.isFinite(parsedMs)) return null;
+  return Math.floor(parsedMs / 1000);
+}
+
+function isFreshWebhookTimestamp(headerValue: string | null): boolean {
+  const timestamp = parseTimestampSeconds(headerValue);
+  if (timestamp === null) return false;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return Math.abs(nowSeconds - timestamp) <= CLAUDE_WEBHOOK_TTL_SECONDS;
+}
+
+async function computeWebhookSignature(secret: string, timestamp: string, rawBody: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    {
+      name: "HMAC",
+      hash: "SHA-256",
+    },
+    false,
+    ["sign"],
+  );
+
+  const message = `${timestamp}.${rawBody}`;
+  const digest = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return [...new Uint8Array(digest)]
+    .map((part) => part.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function authRequired(env: Env): boolean {
   const authToggle = (env.AUTH_REQUIRED ?? "true").toLowerCase() !== "false";
   const hasSecret = Boolean(env.DASHBOARD_API_KEY?.trim());
@@ -47,7 +111,11 @@ function isAuthorized(request: Request, env: Env): boolean {
 }
 
 function isPublicPath(pathname: string): boolean {
-  return pathname === "/api/health" || pathname === "/api/demo" || pathname === "/api/auth/status" || pathname === "/api/auth/session";
+  return pathname === "/api/health"
+    || pathname === "/api/demo"
+    || pathname === "/api/auth/status"
+    || pathname === "/api/auth/session"
+    || pathname === "/api/webhooks/claude";
 }
 
 function demoEvidenceItem(): EvidenceItem {
@@ -157,6 +225,110 @@ export default {
         item,
         report,
       });
+    }
+
+    if (url.pathname === "/api/webhooks/claude" && request.method === "GET") {
+      return json({
+        ok: true,
+        route: "/api/webhooks/claude",
+        signature_required: true,
+        signature_header: "x-claude-signature",
+        timestamp_header: "x-claude-timestamp",
+        ttl_seconds: CLAUDE_WEBHOOK_TTL_SECONDS,
+      });
+    }
+
+    if (url.pathname === "/api/webhooks/claude" && request.method === "POST") {
+      const webhookSecret = env.CLAUDE_WEBHOOK_SECRET?.trim();
+      if (!webhookSecret) {
+        return json(
+          {
+            ok: false,
+            error: "misconfigured",
+            message: "CLAUDE_WEBHOOK_SECRET is not configured.",
+          },
+          503,
+        );
+      }
+
+      const timestampHeader = request.headers.get("x-claude-timestamp")
+        ?? request.headers.get("x-signature-timestamp");
+      const signatureHeader = request.headers.get("x-claude-signature")
+        ?? request.headers.get("x-signature");
+
+      if (!timestampHeader || !signatureHeader) {
+        return json(
+          {
+            ok: false,
+            error: "unauthorized",
+            message: "Missing webhook signature headers.",
+          },
+          401,
+        );
+      }
+
+      if (!isFreshWebhookTimestamp(timestampHeader)) {
+        return json(
+          {
+            ok: false,
+            error: "unauthorized",
+            message: "Webhook timestamp is invalid or stale.",
+          },
+          401,
+        );
+      }
+
+      const rawBody = await request.text();
+      const expected = await computeWebhookSignature(webhookSecret, timestampHeader, rawBody);
+      const received = normalizeWebhookSignature(signatureHeader);
+      if (!timingSafeEqual(received, expected)) {
+        return json(
+          {
+            ok: false,
+            error: "unauthorized",
+            message: "Webhook signature verification failed.",
+          },
+          401,
+        );
+      }
+
+      let payload: unknown = null;
+      let jsonValid = true;
+      try {
+        payload = rawBody ? JSON.parse(rawBody) : null;
+      } catch {
+        jsonValid = false;
+        payload = { raw_body: rawBody };
+      }
+
+      const eventId = request.headers.get("x-claude-event-id")
+        ?? request.headers.get("x-request-id")
+        ?? crypto.randomUUID();
+      const eventType = payload && typeof payload === "object" && "type" in payload
+        ? String((payload as { type?: unknown }).type ?? "unknown")
+        : "unknown";
+
+      await writeLedger(env, "claude_webhook_received", {
+        event_id: eventId,
+        event_type: eventType,
+        received_at: new Date().toISOString(),
+        json_valid: jsonValid,
+        payload,
+      });
+
+      if (
+        payload
+        && typeof payload === "object"
+        && "challenge" in payload
+        && typeof (payload as { challenge?: unknown }).challenge === "string"
+      ) {
+        return json({
+          ok: true,
+          challenge: (payload as { challenge: string }).challenge,
+        });
+      }
+
+      return json({ ok: true, received: true, event_id: eventId, event_type: eventType });
     }
 
     if (url.pathname === "/api/evidence" && request.method === "POST") {
@@ -279,6 +451,8 @@ export default {
             "GET /api/authorities",
             "GET /api/authorities/sections",
             "POST /api/authorities/ingest",
+            "GET /api/webhooks/claude",
+            "POST /api/webhooks/claude",
           ],
         },
         404,

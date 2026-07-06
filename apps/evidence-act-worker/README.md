@@ -10,7 +10,14 @@ In Cloudflare Dashboard:
 3. Binding name: `DB`
 4. Database: `evidence_act_agent`
 
-Then set `database_id` in [wrangler.toml](/Users/spot/evidence-act-worker/wrangler.toml).
+Then set `database_id` in [wrangler.toml](/Users/spot/evidence-agent/apps/evidence-act-worker/wrangler.toml).
+
+## Local markdown asset folder
+
+Use [file/assets](/Users/spot/evidence-agent/apps/evidence-act-worker/file/assets) for user-uploaded markdown reference files.
+
+- Add `.md` references here before ingestion or mapping.
+- The folder is tracked with `.gitkeep` so collaborators get the same structure.
 
 ## Official authority corpus ingestion
 
@@ -99,8 +106,28 @@ npm run deploy
 npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put DASHBOARD_API_KEY
+npx wrangler secret put CLAUDE_WEBHOOK_SECRET
 ```
 
 Note: `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` are optional for downstream integrations. The semantic indexing path in this Worker uses Cloudflare Workers AI via the `AI` binding.
 
 When `DASHBOARD_API_KEY` is set and `AUTH_REQUIRED = "true"` in `wrangler.toml`, dashboard API routes require `Authorization: Bearer <DASHBOARD_API_KEY>`.
+
+## Claude webhook
+
+Endpoint:
+
+- `POST /api/webhooks/claude`
+
+Security model:
+
+- Shared secret via `CLAUDE_WEBHOOK_SECRET`
+- Required headers:
+`x-claude-timestamp`
+`x-claude-signature`
+- Signature format: HMAC SHA-256 over `${timestamp}.${raw_body}` (hex, `sha256=` prefix optional)
+- Replay window: 300 seconds
+
+Quick endpoint probe:
+
+- `GET /api/webhooks/claude`
