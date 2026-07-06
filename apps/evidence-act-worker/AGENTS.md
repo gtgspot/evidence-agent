@@ -88,3 +88,22 @@ Evidence item
 -> Defect
 -> Status
 -> Next action
+
+## Statutory Analysis Method
+
+When interpreting or mapping any statutory provision (see
+docs/superpowers/2026-07-06-methodology-audit-statutory-interpretation.md
+for the audit these rules come from):
+
+1. For any provision that references "prescribed" anything, ALWAYS resolve
+   the relevant regulations — the prescribed procedure/device IS the
+   compliance standard, and it lives in subordinate instruments, not the Act.
+2. Enumerate every external reference in the provision (cross-sections,
+   defined terms, delegations) and resolve each one, even if only to note
+   its function. An interpretation that stops at the Act text is incomplete.
+3. Identify ALL compliance points, not just the most legally interesting
+   one. Each independent mandatory requirement is a potential defect.
+4. Record version assumptions with every interpretation: Act version,
+   regulation version, and date checked. Flag unverified currency as a risk.
+5. Distinguish the objective fact (what a device/record shows) from an
+   opinion about that fact. Proof of the opinion is not proof of the fact.
