@@ -13,11 +13,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterable
 
-from evidence_agent.core import db, list_artefacts, ArtefactClass
+from evidence_agent.core import add_artefact, db, list_artefacts, ArtefactClass
 from evidence_agent.core.hashing import sha256_file
 from evidence_agent.discovery.register import list_requests
 from evidence_agent.discovery.escalation import build_escalation_queue
-from evidence_agent.governance.custody import verify_integrity
+from evidence_agent.governance.custody import record_custody_event, verify_integrity
 from evidence_agent.governance.manifest import export_manifest, duplicate_report
 from evidence_agent.schema import init_all
 
@@ -46,7 +46,9 @@ def _to_utc_iso(epoch_seconds: float) -> str:
     )
 
 
-def _iter_files(root: Path, output_file: Path, include_hidden: bool) -> Iterable[Path]:
+def _iter_files(
+    root: Path, include_hidden: bool, skip_file: Path | None = None
+) -> Iterable[Path]:
     for current_root, dirs, files in os.walk(root):
         current_path = Path(current_root)
         rel_root = current_path.relative_to(root)
@@ -57,7 +59,7 @@ def _iter_files(root: Path, output_file: Path, include_hidden: bool) -> Iterable
 
         for name in sorted(files):
             candidate = current_path / name
-            if candidate.resolve() == output_file.resolve():
+            if skip_file is not None and candidate.resolve() == skip_file.resolve():
                 continue
             if candidate.is_file():
                 yield rel_root / name if rel_root != Path(".") else Path(name)
@@ -71,7 +73,7 @@ def compile_manifest(source_dir: Path, output_file: Path, include_hidden: bool) 
         raise FileNotFoundError(f"Source directory does not exist: {source_dir}")
 
     entries: list[dict] = []
-    for rel_path in _iter_files(source_dir, output_file, include_hidden):
+    for rel_path in _iter_files(source_dir, include_hidden, skip_file=output_file):
         absolute = source_dir / rel_path
         stat = absolute.stat()
         entries.append(
@@ -96,6 +98,69 @@ def compile_manifest(source_dir: Path, output_file: Path, include_hidden: bool) 
         handle.write("\n")
 
     return manifest
+
+
+def ingest_directory(
+    conn,
+    matter_id: str,
+    source_dir: Path,
+    *,
+    source_label: str | None = None,
+    include_hidden: bool = False,
+    actor: str = "evidence-agent",
+    skip_file: Path | None = None,
+) -> dict:
+    """Register every file under `source_dir` as an Original artefact.
+
+    Idempotent: a file whose absolute path and sha256 already exist for the
+    matter is skipped, so re-running after adding files only registers the
+    new ones. Each registration appends an "ingested" custody event.
+    """
+    source_dir = source_dir.resolve()
+    if not source_dir.exists() or not source_dir.is_dir():
+        raise FileNotFoundError(f"Source directory does not exist: {source_dir}")
+
+    label = source_label or source_dir.name
+    ingested: list[dict] = []
+    skipped = 0
+    for rel_path in _iter_files(source_dir, include_hidden, skip_file=skip_file):
+        absolute = (source_dir / rel_path).resolve()
+        digest = sha256_file(absolute)
+        existing = conn.execute(
+            "SELECT id FROM artefacts WHERE matter_id = ? AND path = ? AND sha256 = ?",
+            (matter_id, absolute.as_posix(), digest),
+        ).fetchone()
+        if existing is not None:
+            skipped += 1
+            continue
+        artefact = add_artefact(
+            conn,
+            matter_id,
+            ArtefactClass.ORIGINAL,
+            label,
+            absolute.as_posix(),
+            metadata={
+                "relative_path": rel_path.as_posix(),
+                "bytes": absolute.stat().st_size,
+            },
+        )
+        record_custody_event(
+            conn,
+            artefact.id,
+            "ingested",
+            actor,
+            _to_utc_iso(datetime.now(tz=timezone.utc).timestamp()),
+            note=f"Ingested from {source_dir.as_posix()}",
+        )
+        ingested.append({"artefact_id": artefact.id, "path": rel_path.as_posix()})
+
+    return {
+        "matter_id": matter_id,
+        "source_directory": source_dir.as_posix(),
+        "source_label": label,
+        "ingested": ingested,
+        "skipped": skipped,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -135,6 +200,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Initialise a matter database (all subsystem tables).",
     )
     init_parser.add_argument("--db", required=True, help="Path to the matter DB.")
+
+    ingest_parser = subparsers.add_parser(
+        "ingest",
+        help="Register every file in a directory as an Original artefact.",
+    )
+    ingest_parser.add_argument("--db", required=True, help="Path to the matter DB.")
+    ingest_parser.add_argument("--matter", required=True, help="Matter id.")
+    ingest_parser.add_argument(
+        "--source",
+        default=".",
+        help="Directory to ingest (default: current directory).",
+    )
+    ingest_parser.add_argument(
+        "--source-label",
+        default=None,
+        help="Provenance label recorded on each artefact "
+        "(default: the source directory name).",
+    )
+    ingest_parser.add_argument(
+        "--actor",
+        default="evidence-agent",
+        help="Actor recorded on each custody event (default: evidence-agent).",
+    )
+    ingest_parser.add_argument(
+        "--include-hidden",
+        action="store_true",
+        help="Include hidden files and directories.",
+    )
 
     manifest_parser = subparsers.add_parser(
         "manifest",
@@ -178,6 +271,28 @@ def _cmd_init(args: argparse.Namespace) -> int:
     conn = db.connect(args.db)
     init_all(conn)
     print(f"Initialised matter DB at {args.db}")
+    return 0
+
+
+def _cmd_ingest(args: argparse.Namespace) -> int:
+    conn = db.connect(args.db)
+    init_all(conn)  # idempotent; lets ingest run against a brand-new DB path
+    result = ingest_directory(
+        conn,
+        args.matter,
+        Path(args.source),
+        source_label=args.source_label,
+        include_hidden=args.include_hidden,
+        actor=args.actor,
+        skip_file=Path(args.db),
+    )
+    for entry in result["ingested"]:
+        print(f"{entry['artefact_id']} {entry['path']}")
+    print(
+        f"Ingested {len(result['ingested'])} files "
+        f"({result['skipped']} already registered) from "
+        f"{result['source_directory']} into matter {result['matter_id']}"
+    )
     return 0
 
 
@@ -239,6 +354,8 @@ def run(argv: list[str]) -> int:
         return _cmd_compile(args)
     if command == "init":
         return _cmd_init(args)
+    if command == "ingest":
+        return _cmd_ingest(args)
     if command == "manifest":
         return _cmd_manifest(args)
     if command == "verify":
