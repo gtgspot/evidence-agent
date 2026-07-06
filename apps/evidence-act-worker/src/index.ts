@@ -118,6 +118,22 @@ function isPublicPath(pathname: string): boolean {
     || pathname === "/api/webhooks/claude";
 }
 
+function normalizeContextFileName(value: string | null): string {
+  const fallback = "case_context.md";
+  const raw = value?.trim() || fallback;
+  const safe = raw.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+  return safe || fallback;
+}
+
+function contextFileId(name: string): string {
+  const core = name
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+  return `ctx-${core || "default"}`;
+}
+
 function demoEvidenceItem(): EvidenceItem {
   return {
     id: "E-BWC-0949-LICENCE",
@@ -331,6 +347,106 @@ export default {
       return json({ ok: true, received: true, event_id: eventId, event_type: eventType });
     }
 
+    if (url.pathname === "/api/context-file" && request.method === "GET") {
+      const name = normalizeContextFileName(url.searchParams.get("name"));
+      const row = await env.DB.prepare(`
+        SELECT id, name, content_text, source_path, created_at, updated_at
+        FROM context_files
+        WHERE name = ?
+        LIMIT 1
+      `)
+        .bind(name)
+        .first<{
+          id: string;
+          name: string;
+          content_text: string;
+          source_path: string | null;
+          created_at: string;
+          updated_at: string;
+        }>();
+
+      if (!row) {
+        return json({
+          ok: true,
+          exists: false,
+          file: {
+            id: contextFileId(name),
+            name,
+            content_text: "",
+            source_path: `file/context/${name}`,
+            created_at: null,
+            updated_at: null,
+          },
+        });
+      }
+
+      return json({ ok: true, exists: true, file: row });
+    }
+
+    if (url.pathname === "/api/context-file" && request.method === "POST") {
+      const payload = await readJson<{
+        name?: string;
+        content?: string;
+        source_path?: string;
+      }>(request);
+
+      const name = normalizeContextFileName(payload.name ?? null);
+      const content = (payload.content ?? "").toString();
+      const sourcePath = payload.source_path?.trim() || `file/context/${name}`;
+      if (content.length > 250_000) {
+        return json(
+          {
+            ok: false,
+            error: "bad_request",
+            message: "Context file content is too large (max 250000 chars).",
+          },
+          400,
+        );
+      }
+
+      const id = contextFileId(name);
+      await env.DB.prepare(`
+        INSERT INTO context_files (
+          id,
+          name,
+          content_text,
+          source_path
+        )
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+          content_text = excluded.content_text,
+          source_path = excluded.source_path,
+          updated_at = CURRENT_TIMESTAMP
+      `)
+        .bind(id, name, content, sourcePath)
+        .run();
+
+      const saved = await env.DB.prepare(`
+        SELECT id, name, content_text, source_path, created_at, updated_at
+        FROM context_files
+        WHERE name = ?
+        LIMIT 1
+      `)
+        .bind(name)
+        .first<{
+          id: string;
+          name: string;
+          content_text: string;
+          source_path: string | null;
+          created_at: string;
+          updated_at: string;
+        }>();
+
+      await writeLedger(env, "context_file_upserted", {
+        id,
+        name,
+        source_path: sourcePath,
+        content_length: content.length,
+      });
+
+      return json({ ok: true, file: saved });
+    }
+
     if (url.pathname === "/api/evidence" && request.method === "POST") {
       const item = await readJson<EvidenceItem>(request);
 
@@ -453,6 +569,8 @@ export default {
             "POST /api/authorities/ingest",
             "GET /api/webhooks/claude",
             "POST /api/webhooks/claude",
+            "GET /api/context-file",
+            "POST /api/context-file",
           ],
         },
         404,

@@ -19,6 +19,13 @@ Use [file/assets](/Users/spot/evidence-agent/apps/evidence-act-worker/file/asset
 - Add `.md` references here before ingestion or mapping.
 - The folder is tracked with `.gitkeep` so collaborators get the same structure.
 
+Use [file/context](/Users/spot/evidence-agent/apps/evidence-act-worker/file/context) for context markdown files exposed via Worker APIs and the frontend context panel.
+
+- Default file: `file/context/case_context.md`
+- Worker endpoints:
+`GET /api/context-file?name=case_context.md`
+`POST /api/context-file`
+
 ## Official authority corpus ingestion
 
 Official statutory text is now designed to be pulled directly from an app asset in R2 and parsed into D1.

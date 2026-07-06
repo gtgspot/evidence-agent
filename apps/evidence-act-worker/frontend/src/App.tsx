@@ -150,6 +150,19 @@ interface ApiHealthPayload {
   };
 }
 
+interface ContextFileApiPayload {
+  ok: boolean;
+  exists?: boolean;
+  file?: {
+    id: string;
+    name: string;
+    content_text: string;
+    source_path: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+  };
+}
+
 interface UiError {
   id: string;
   message: string;
@@ -434,6 +447,13 @@ export default function App(): JSX.Element {
   const [healthLoading, setHealthLoading] = useState(true);
   const [healthError, setHealthError] = useState("");
   const [uiErrors, setUiErrors] = useState<UiError[]>([]);
+  const [contextFileName, setContextFileName] = useState("case_context.md");
+  const [contextSourcePath, setContextSourcePath] = useState("file/context/case_context.md");
+  const [contextContent, setContextContent] = useState("");
+  const [contextUpdatedAt, setContextUpdatedAt] = useState<string | null>(null);
+  const [contextLoading, setContextLoading] = useState(false);
+  const [contextSaving, setContextSaving] = useState(false);
+  const [contextMessage, setContextMessage] = useState("");
 
   const coreFlow = "Evidence item -> Fact in issue -> Statutory rule -> Defect -> Status -> Next action";
   const typeConfig = useMemo(() => getItemTypeConfig(form.itemType), [form.itemType]);
@@ -474,7 +494,7 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     if (!authReady || !isAuthenticated) return;
-    void Promise.all([loadEvidence(), loadLedger()]);
+    void Promise.all([loadEvidence(), loadLedger(), loadContextFile()]);
   }, [authReady, isAuthenticated]);
 
   async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -640,6 +660,95 @@ export default function App(): JSX.Element {
       return;
     }
     setLedger(data);
+  }
+
+  async function loadContextFile(nameOverride?: string): Promise<void> {
+    const requestedName = (nameOverride ?? contextFileName).trim() || "case_context.md";
+    setContextLoading(true);
+    setContextMessage("");
+
+    const res = await apiFetch(`/api/context-file?name=${encodeURIComponent(requestedName)}`);
+    if (!res.ok) {
+      setContextMessage(`Context file load failed (${res.status}).`);
+      setContextLoading(false);
+      return;
+    }
+
+    let data: ContextFileApiPayload;
+    try {
+      data = (await res.json()) as ContextFileApiPayload;
+    } catch {
+      pushUiError("JSON parse failed for /api/context-file GET.");
+      setContextMessage("Context file JSON parse failed.");
+      setContextLoading(false);
+      return;
+    }
+
+    if (!data.file) {
+      setContextMessage("Context file response missing file payload.");
+      setContextLoading(false);
+      return;
+    }
+
+    setContextFileName(data.file.name);
+    setContextSourcePath(data.file.source_path ?? `file/context/${data.file.name}`);
+    setContextContent(data.file.content_text ?? "");
+    setContextUpdatedAt(data.file.updated_at ?? null);
+
+    if (data.exists) {
+      setContextMessage("Context file loaded.");
+    } else {
+      setContextMessage("Context file not yet saved in D1. Edit and save to create it.");
+    }
+
+    setContextLoading(false);
+  }
+
+  async function saveContextFile(): Promise<void> {
+    const name = contextFileName.trim() || "case_context.md";
+    const sourcePath = contextSourcePath.trim() || `file/context/${name}`;
+
+    setContextSaving(true);
+    setContextMessage("");
+
+    const res = await apiFetch("/api/context-file", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name,
+        source_path: sourcePath,
+        content: contextContent,
+      }),
+    });
+
+    if (!res.ok) {
+      setContextMessage(`Context file save failed (${res.status}).`);
+      setContextSaving(false);
+      return;
+    }
+
+    let data: ContextFileApiPayload;
+    try {
+      data = (await res.json()) as ContextFileApiPayload;
+    } catch {
+      pushUiError("JSON parse failed for /api/context-file POST.");
+      setContextMessage("Context file save response parse failed.");
+      setContextSaving(false);
+      return;
+    }
+
+    if (!data.file) {
+      setContextMessage("Context file save returned empty payload.");
+      setContextSaving(false);
+      return;
+    }
+
+    setContextFileName(data.file.name);
+    setContextSourcePath(data.file.source_path ?? sourcePath);
+    setContextUpdatedAt(data.file.updated_at ?? null);
+    setContextMessage("Context file saved.");
+    setContextSaving(false);
+    await loadLedger();
   }
 
   function updateForm<K extends keyof FormState>(key: K, value: FormState[K]): void {
@@ -1705,6 +1814,58 @@ export default function App(): JSX.Element {
               ) : (
                 <p className="text-danger">{healthError || "Health status unavailable."}</p>
               )}
+            </CardContent>
+          </Card>
+
+          <Card className="xl:col-span-12">
+            <CardHeader>
+              <CardTitle>Context File</CardTitle>
+              <CardDescription>Directly accessible matter context inside the Worker and dashboard UI.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="space-y-1 md:col-span-1">
+                  <Label htmlFor="context-file-name">File name</Label>
+                  <Input
+                    id="context-file-name"
+                    value={contextFileName}
+                    onChange={(e) => setContextFileName(e.target.value)}
+                    placeholder="case_context.md"
+                  />
+                </div>
+                <div className="space-y-1 md:col-span-2">
+                  <Label htmlFor="context-source-path">Source path</Label>
+                  <Input
+                    id="context-source-path"
+                    value={contextSourcePath}
+                    onChange={(e) => setContextSourcePath(e.target.value)}
+                    placeholder="file/context/case_context.md"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="secondary" onClick={() => void loadContextFile()} disabled={contextLoading || contextSaving}>
+                  {contextLoading ? "Loading..." : "Load Context"}
+                </Button>
+                <Button onClick={() => void saveContextFile()} disabled={contextSaving || contextLoading}>
+                  {contextSaving ? "Saving..." : "Save Context"}
+                </Button>
+                <Badge variant="neutral">Updated: {contextUpdatedAt ?? "not saved"}</Badge>
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="context-content">Context content</Label>
+                <Textarea
+                  id="context-content"
+                  value={contextContent}
+                  onChange={(e) => setContextContent(e.target.value)}
+                  rows={12}
+                  placeholder="# Case Context\n\nAdd factual and legal context for counsel handover."
+                />
+              </div>
+
+              {contextMessage ? <p className="text-xs text-muted-foreground">{contextMessage}</p> : null}
             </CardContent>
           </Card>
         </div>
