@@ -1,0 +1,40 @@
+name = "evidence-act-agent"
+main = "src/index.ts"
+compatibility_date = "2026-07-05"
+workers_dev = true
+preview_urls = true
+
+[assets]
+directory = "./frontend/dist"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "evidence_act_agent"
+database_id = "af6ef852-f94e-4ece-aba2-cd9647054d63"
+
+[vars]
+APP_NAME = "evidence-act-agent"
+APP_ENV = "production"
+DEFAULT_JURISDICTION = "Victoria"
+DEFAULT_INSTRUMENT = "Evidence Act 2008 (Vic)"
+DEFAULT_VERSION = "027"
+DEFAULT_VERSION_DATE = "2024-03-25"
+LAST_DEPLOY_AT = "2026-07-06T14:35:00+10:00"
+AUTH_REQUIRED = "true"
+VECTOR_NAMESPACE = "authority-corpus-v1"
+VECTOR_EMBED_MODEL = "@cf/baai/bge-base-en-v1.5"
+
+# Optional Workers AI binding (required for embedding generation):
+# [ai]
+# binding = "AI"
+
+# Optional Vectorize binding (required for semantic retrieval):
+# [[vectorize]]
+# binding = "VECTOR_INDEX"
+# index_name = "evidence-authority-index"
+
+# Optional R2 binding (enable after bucket creation):
+# [[r2_buckets]]
+# binding = "EVIDENCE_FILES"
+# bucket_name = "evidence-act-files"

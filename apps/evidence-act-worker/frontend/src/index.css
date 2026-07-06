@@ -1,0 +1,64 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand-blue: 217 89% 61%; /* #4285F4 */
+  --brand-red: 5 81% 56%; /* #EA4335 */
+  --brand-yellow: 45 97% 50%; /* #FBBC04 */
+  --brand-green: 136 53% 43%; /* #34A853 */
+  --brand-grey: 206 6% 25%; /* #3C4043 */
+  --brand-grey-500: 210 6% 63%; /* #9AA0A6 */
+
+  --background: 210 20% 97%;
+  --foreground: var(--brand-grey);
+  --card: 0 0% 100%;
+  --card-foreground: var(--brand-grey);
+  --primary: var(--brand-blue);
+  --primary-foreground: 0 0% 100%;
+  --muted: 210 16% 92%;
+  --muted-foreground: 206 7% 36%;
+  --border: 210 7% 84%;
+  --ring: var(--brand-blue);
+  --success: var(--brand-green);
+  --warning: var(--brand-yellow);
+  --danger: var(--brand-red);
+  --radius: 0.75rem;
+}
+
+* {
+  @apply border-border;
+}
+
+html,
+body,
+#root {
+  @apply min-h-full;
+}
+
+body {
+  @apply bg-background text-foreground font-body antialiased;
+  background-image:
+    radial-gradient(1200px 620px at 12% -12%, rgba(66, 133, 244, 0.22), transparent),
+    radial-gradient(1000px 560px at 88% -10%, rgba(251, 188, 4, 0.2), transparent),
+    radial-gradient(900px 520px at 50% 112%, rgba(52, 168, 83, 0.14), transparent),
+    linear-gradient(180deg, rgba(249, 250, 251, 0.98), rgba(239, 242, 245, 1));
+}
+
+.dashboard-grid {
+  background-size: 18px 18px;
+  background-image: radial-gradient(circle at 1px 1px, rgba(60, 64, 67, 0.09) 1px, transparent 0);
+}
+
+@media print {
+  body {
+    background: #ffffff;
+    color: #111111;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
